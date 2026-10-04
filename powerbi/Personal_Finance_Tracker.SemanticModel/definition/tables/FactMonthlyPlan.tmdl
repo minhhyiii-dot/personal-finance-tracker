@@ -1,0 +1,54 @@
+/// Monthly category-level expense budgets and allocation targets.
+table FactMonthlyPlan
+
+	/// First day of the plan month, related to DimDate.
+	column Month
+		dataType: dateTime
+		isHidden
+		formatString: dd/MM/yyyy
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Month
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// Natural category key related to DimCategory.
+	column Category
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Category
+
+	/// Planned VND amount for the month and category.
+	column 'Planned Amount'
+		dataType: int64
+		formatString: #,##0
+		summarizeBy: sum
+		sourceColumn: Planned Amount
+
+	partition FactMonthlyPlan = m
+		mode: import
+		source =
+				let
+					// Keeps monthly plan fields from the expandable Excel table.
+					#"Selected Plan Columns" = Table.SelectColumns(MonthlyPlanRaw, {"Month", "Category", "Planned Amount"}, MissingField.UseNull),
+					#"Cleaned Plan Category" = Table.TransformColumns(
+						#"Selected Plan Columns",
+						{{"Category", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text}}
+					),
+					#"Converted Plan Types" = Table.TransformColumns(
+						#"Cleaned Plan Category",
+						{
+							{"Month", each try Date.StartOfMonth(Date.From(_)) otherwise null, type date},
+							{"Planned Amount", each try Int64.From(Number.Round(Number.From(_), 0)) otherwise null, Int64.Type}
+						}
+					),
+					// Removes incomplete or negative plan rows while allowing a deliberate zero plan.
+					#"Filtered Valid Plan Rows" = Table.SelectRows(
+						#"Converted Plan Types",
+						each [Month] <> null and [Category] <> null and [Planned Amount] <> null and [Planned Amount] >= 0
+					)
+				in
+					#"Filtered Valid Plan Rows"
+

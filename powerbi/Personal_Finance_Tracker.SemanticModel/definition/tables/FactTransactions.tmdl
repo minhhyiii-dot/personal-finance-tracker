@@ -1,0 +1,83 @@
+/// Valid income, expense, refund and allocation entries used by cash-flow KPIs.
+table FactTransactions
+
+	/// Transaction date related to DimDate.
+	column Date
+		dataType: dateTime
+		isHidden
+		formatString: dd/MM/yyyy
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// Refresh-stable key derived from workbook order and transaction date.
+	column 'Transaction Key'
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Transaction Key
+
+	/// Income, Expense, Refund or Allocation.
+	column 'Transaction Type'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Transaction Type
+
+	/// Positive VND amount; the type and account side determine financial direction.
+	column Amount
+		dataType: int64
+		formatString: #,##0
+		summarizeBy: sum
+		sourceColumn: Amount
+
+	/// Account from which the movement originates when applicable.
+	column 'From Account'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: From Account
+
+	/// Account receiving the movement when applicable.
+	column 'To Account'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: To Account
+
+	/// Natural category key related to DimCategory.
+	column Category
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Category
+
+	/// Optional merchant or counterparty.
+	column Merchant
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Merchant
+
+	/// Optional free-form transaction context.
+	column Note
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Note
+
+	partition FactTransactions = m
+		mode: import
+		source =
+				let
+					// Excludes transfers and adjustments from income, expense and allocation KPIs.
+					#"Filtered KPI Transactions" = Table.SelectRows(
+						ValidTransactions,
+						each List.Contains({"Income", "Expense", "Refund", "Allocation"}, [Type])
+					),
+					#"Selected Fact Fields" = Table.SelectColumns(
+						#"Filtered KPI Transactions",
+						{"Date", "Transaction Key", "Type", "Amount", "From Account", "To Account", "Category", "Merchant", "Note"}
+					),
+					#"Renamed Transaction Type" = Table.RenameColumns(#"Selected Fact Fields", {{"Type", "Transaction Type"}})
+				in
+					#"Renamed Transaction Type"
+

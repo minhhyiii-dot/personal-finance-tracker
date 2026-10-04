@@ -1,0 +1,14 @@
+# Power BI local state and imported data cache
+**/.pbi/
+**/localSettings.json
+**/cache.abf
+**/unappliedChanges.json
+**/Recovery/
+**/Backups/
+*.pbix
+# Keep the verified synthetic specimen only; do not add personal workbooks.
+*.xlsx
+!workbook/Personal_Finance_Tracker_Demo.xlsx
+~$*
+.DS_Store
+Thumbs.db

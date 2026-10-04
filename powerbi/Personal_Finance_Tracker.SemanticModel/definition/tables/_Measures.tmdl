@@ -1,0 +1,150 @@
+/// Explicit V1 measures for income, spending, planning and tracked balances.
+table _Measures
+
+	/// Income transactions in the current date and category context.
+	measure 'Total Income' = ```
+			CALCULATE(
+			    SUM('FactTransactions'[Amount]),
+			    KEEPFILTERS('FactTransactions'[Transaction Type] = "Income")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Cash Flow
+
+	/// Gross expense before merchant refunds.
+	measure 'Gross Expense' = ```
+			CALCULATE(
+			    SUM('FactTransactions'[Amount]),
+			    KEEPFILTERS('FactTransactions'[Transaction Type] = "Expense")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Cash Flow
+
+	/// Refund amount associated with original expense categories.
+	measure 'Total Refund' = ```
+			CALCULATE(
+			    SUM('FactTransactions'[Amount]),
+			    KEEPFILTERS('FactTransactions'[Transaction Type] = "Refund")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Cash Flow
+
+	/// Expense after subtracting refunds; transfers and allocations are excluded.
+	measure 'Net Expense' = [Gross Expense] - [Total Refund]
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Cash Flow
+
+	/// Income minus net expense before allocation contributions.
+	measure 'Monthly Surplus' = [Total Income] - [Net Expense]
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Cash Flow
+
+	/// Gross outbound allocation; withdrawals do not reduce achieved contribution.
+	measure 'Allocation Contribution' = ```
+			CALCULATE(
+			    SUM('FactTransactions'[Amount]),
+			    KEEPFILTERS('FactTransactions'[Transaction Type] = "Allocation"),
+			    KEEPFILTERS(NOT ISBLANK('FactTransactions'[From Account]))
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Planning
+
+	/// Planned amount for categories configured as Allocation.
+	measure 'Allocation Target' = ```
+			CALCULATE(
+			    SUM('FactMonthlyPlan'[Planned Amount]),
+			    KEEPFILTERS('DimCategory'[Allowed Type] = "Allocation")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Planning
+
+	/// Share of the selected allocation target achieved through gross contributions.
+	measure 'Allocation Target %' = DIVIDE([Allocation Contribution], [Allocation Target])
+		formatString: 0.0%
+		displayFolder: Planning
+
+	/// Planned amount for categories configured as Expense; allocation targets are excluded.
+	measure 'Expense Budget' = ```
+			CALCULATE(
+			    SUM('FactMonthlyPlan'[Planned Amount]),
+			    KEEPFILTERS('DimCategory'[Allowed Type] = "Expense")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Planning
+
+	/// Net expense minus expense budget; blank when no expense budget is configured.
+	measure 'Budget Variance' = ```
+			VAR _budget = [Expense Budget]
+			RETURN
+			    IF(
+			        ISBLANK(_budget),
+			        BLANK(),
+			        [Net Expense] - _budget
+			    )
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Planning
+
+	/// Natural account balance accumulated through the latest date in the current selection.
+	measure 'Account Balance' = ```
+			VAR _asOfDate = MAX('DimDate'[Date])
+			RETURN
+			    COALESCE(CALCULATE(
+			        SUM('FactAccountMovements'[Balance Delta]),
+			        REMOVEFILTERS('DimDate'),
+			        KEEPFILTERS('FactAccountMovements'[Date] <= _asOfDate)
+			    ), 0)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Balances
+
+	/// Sum of tracked asset balances; inactive accounts remain for historical continuity.
+	measure 'Tracked Liquid Assets' = ```
+			CALCULATE(
+			    [Account Balance],
+			    KEEPFILTERS('DimAccount'[Account Class] = "Asset")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Balances
+
+	/// Sum of tracked liability balances expressed as positive debt owed.
+	measure 'Outstanding Debt' = ```
+			CALCULATE(
+			    [Account Balance],
+			    KEEPFILTERS('DimAccount'[Account Class] = "Liability")
+			)
+			```
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Balances
+
+	/// Tracked liquid assets minus outstanding debt; this is not complete net worth.
+	measure 'Tracked Net Position' = [Tracked Liquid Assets] - [Outstanding Debt]
+		formatString: #,##0;[Red]-#,##0;-
+		displayFolder: Balances
+
+	/// Compact allocation progress label for the top KPI card.
+	measure 'Allocation Actual / Target' = ```
+			FORMAT(COALESCE([Allocation Contribution], 0), "#,##0")
+			    & " / "
+			    & FORMAT([Allocation Target], "#,##0")
+			    & " VND"
+			```
+		formatString: General
+		displayFolder: Planning
+
+	column Placeholder
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Placeholder
+
+	partition _Measures = m
+		mode: import
+		source = #table(type table [Placeholder = text], {{"Measures"}})

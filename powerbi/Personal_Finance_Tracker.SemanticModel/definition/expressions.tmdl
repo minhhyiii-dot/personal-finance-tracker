@@ -1,0 +1,83 @@
+expression WorkbookPath = "C:/path/to/personal-finance-tracker/workbook/Personal_Finance_Tracker_Demo.xlsx" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+
+expression WorkbookSource =
+		let
+			// Opens the single Excel source of truth once for all downstream queries.
+			Source = Excel.Workbook(File.Contents(WorkbookPath), null, true)
+		in
+			Source
+
+expression TransactionsRaw =
+		let
+			// Selects the expandable Excel transaction table rather than a fixed worksheet range.
+			Source = WorkbookSource{[Item="tbl_transactions", Kind="Table"]}[Data]
+		in
+			Source
+
+expression AccountsRaw =
+		let
+			// Selects every tracked account, including inactive rows retained for history.
+			Source = WorkbookSource{[Item="tbl_accounts", Kind="Table"]}[Data]
+		in
+			Source
+
+expression CategoriesRaw =
+		let
+			// Selects the editable category taxonomy used by transactions and monthly plans.
+			Source = WorkbookSource{[Item="tbl_categories", Kind="Table"]}[Data]
+		in
+			Source
+
+expression MonthlyPlanRaw =
+		let
+			// Selects budget and allocation targets from the expandable monthly plan table.
+			Source = WorkbookSource{[Item="tbl_monthly_plan", Kind="Table"]}[Data]
+		in
+			Source
+
+expression ValidTransactions =
+		let
+			// Keeps the source fields required by the analytical model.
+			#"Selected Transaction Columns" = Table.SelectColumns(
+				TransactionsRaw,
+				{"Date", "Type", "Amount", "From Account", "To Account", "Category", "Merchant", "Note", "Entry Status"},
+				MissingField.UseNull
+			),
+			// Normalizes user-entered text while preserving nulls for optional fields.
+			#"Cleaned Transaction Text" = Table.TransformColumns(
+				#"Selected Transaction Columns",
+				{
+					{"Type", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+					{"From Account", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+					{"To Account", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+					{"Category", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+					{"Merchant", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+					{"Note", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+					{"Entry Status", each Text.Upper(if _ = null then "" else Text.Trim(Text.From(_))), type text}
+				}
+			),
+			// Converts dates and VND amounts defensively so invalid rows can be excluded.
+			#"Converted Transaction Types" = Table.TransformColumns(
+				#"Cleaned Transaction Text",
+				{
+					{"Date", each try Date.From(_) otherwise null, type date},
+					{"Amount", each try Int64.From(Number.Round(Number.From(_), 0)) otherwise null, Int64.Type}
+				}
+			),
+			// Loads only rows that pass Excel validation and contain a positive amount.
+			#"Filtered Valid Transactions" = Table.SelectRows(
+				#"Converted Transaction Types",
+				each [Date] <> null and [Type] <> null and [Amount] <> null and [Amount] > 0 and [Entry Status] = "OK"
+			),
+			// Adds a stable refresh-time sequence based on the workbook row order.
+			#"Added Transaction Index" = Table.AddIndexColumn(#"Filtered Valid Transactions", "Transaction Index", 1, 1, Int64.Type),
+			// Creates a readable key shared by the transaction and movement facts.
+			#"Added Transaction Key" = Table.AddColumn(
+				#"Added Transaction Index",
+				"Transaction Key",
+				each "TXN-" & Date.ToText([Date], [Format="yyyyMMdd", Culture="en-US"]) & "-" & Text.PadStart(Text.From([Transaction Index], "en-US"), 6, "0"),
+				type text
+			)
+		in
+			#"Added Transaction Key"
+

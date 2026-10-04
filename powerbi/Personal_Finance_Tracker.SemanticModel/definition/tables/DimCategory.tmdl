@@ -1,0 +1,64 @@
+/// Editable transaction taxonomy and default planning classifications.
+table DimCategory
+
+	/// Unique category name used by transactions and monthly plans.
+	column 'Category Name'
+		dataType: string
+		isDefaultLabel
+		summarizeBy: none
+		sourceColumn: Category Name
+
+	/// Broader analytical grouping for related categories.
+	column 'Category Group'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Category Group
+
+	/// Transaction type permitted for this category.
+	column 'Allowed Type'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Allowed Type
+
+	/// Default classification indicating whether spending is a need or want.
+	column 'Need / Want'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Need / Want
+
+	/// Default classification indicating whether spending is fixed or variable.
+	column 'Fixed / Variable'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Fixed / Variable
+
+	/// Yes keeps the category available for current entry while No retains its history.
+	column Active
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Active
+
+	partition DimCategory = m
+		mode: import
+		source =
+				let
+					// Keeps only category attributes required by the model.
+					#"Selected Category Columns" = Table.SelectColumns(
+						CategoriesRaw,
+						{"Category Name", "Category Group", "Allowed Type", "Need / Want", "Fixed / Variable", "Active"},
+						MissingField.UseNull
+					),
+					// Trims editable text fields and normalizes missing values.
+					#"Cleaned Category Text" = Table.TransformColumns(
+						#"Selected Category Columns",
+						List.Transform(
+							{"Category Name", "Category Group", "Allowed Type", "Need / Want", "Fixed / Variable", "Active"},
+							each {_, each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text}
+						)
+					),
+					// Removes unused workbook rows while retaining inactive categories.
+					#"Filtered Named Categories" = Table.SelectRows(#"Cleaned Category Text", each [Category Name] <> null),
+					#"Removed Duplicate Categories" = Table.Distinct(#"Filtered Named Categories", {"Category Name"})
+				in
+					#"Removed Duplicate Categories"
+

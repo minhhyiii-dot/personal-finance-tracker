@@ -1,0 +1,24 @@
+relationship 'FactTransactions to DimDate'
+	fromColumn: FactTransactions.Date
+	toColumn: DimDate.Date
+
+relationship 'FactTransactions to DimCategory'
+	fromColumn: FactTransactions.Category
+	toColumn: DimCategory.'Category Name'
+
+relationship 'FactAccountMovements to DimDate'
+	fromColumn: FactAccountMovements.Date
+	toColumn: DimDate.Date
+
+relationship 'FactAccountMovements to DimAccount'
+	fromColumn: FactAccountMovements.Account
+	toColumn: DimAccount.'Account Name'
+
+relationship 'FactMonthlyPlan to DimDate'
+	fromColumn: FactMonthlyPlan.Month
+	toColumn: DimDate.Date
+
+relationship 'FactMonthlyPlan to DimCategory'
+	fromColumn: FactMonthlyPlan.Category
+	toColumn: DimCategory.'Category Name'
+

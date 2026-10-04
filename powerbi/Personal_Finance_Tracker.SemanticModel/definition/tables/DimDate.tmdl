@@ -1,0 +1,123 @@
+/// Contiguous calendar used for month filtering and cumulative account balances.
+table DimDate
+	dataCategory: Time
+
+	/// Calendar date at daily grain.
+	column Date
+		dataType: dateTime
+		isKey
+		formatString: dd/MM/yyyy
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// Month label shown in the report slicer.
+	column Month
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Month
+		sortByColumn: 'Month Sort'
+
+	/// Numeric year-month key used to sort Month chronologically.
+	column 'Month Sort'
+		dataType: int64
+		isHidden
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: Month Sort
+
+	/// Calendar year.
+	column Year
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: Year
+
+	/// Month number from 1 through 12.
+	column 'Month Number'
+		dataType: int64
+		isHidden
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: Month Number
+
+	/// Calendar quarter label.
+	column Quarter
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Quarter
+
+	/// Day of month.
+	column Day
+		dataType: int64
+		formatString: 0
+		summarizeBy: none
+		sourceColumn: Day
+
+	hierarchy 'Year Month Date'
+
+		level Year
+			column: Year
+
+		level Month
+			column: Month
+
+		level Date
+			column: Date
+
+	partition DimDate = m
+		mode: import
+		source =
+				let
+					// Collects transaction dates without failing when the transaction table is empty.
+					#"Collected Transaction Dates" = try List.RemoveNulls(ValidTransactions[Date]) otherwise {},
+					// Collects valid account opening dates.
+					#"Collected Opening Dates" = List.RemoveNulls(
+						List.Transform(
+							try AccountsRaw[Opening Date] otherwise {},
+							each try Date.From(_) otherwise null
+						)
+					),
+					// Collects valid monthly-plan dates.
+					#"Collected Plan Dates" = List.RemoveNulls(
+						List.Transform(
+							try MonthlyPlanRaw[Month] otherwise {},
+							each try Date.From(_) otherwise null
+						)
+					),
+					// Guarantees at least the V1 tracking window from September 2026 through August 2027.
+					#"Combined Calendar Dates" = List.Combine(
+						{
+							{#date(2026, 9, 1), #date(2027, 8, 31)},
+							#"Collected Transaction Dates",
+							#"Collected Opening Dates",
+							#"Collected Plan Dates"
+						}
+					),
+					#"Found Calendar Start" = Date.StartOfMonth(List.Min(#"Combined Calendar Dates")),
+					#"Found Calendar End" = Date.EndOfMonth(List.Max(#"Combined Calendar Dates")),
+					#"Generated Calendar Dates" = List.Dates(
+						#"Found Calendar Start",
+						Duration.Days(#"Found Calendar End" - #"Found Calendar Start") + 1,
+						#duration(1, 0, 0, 0)
+					),
+					#"Converted Dates To Table" = Table.FromList(#"Generated Calendar Dates", Splitter.SplitByNothing(), {"Date"}),
+					#"Converted Calendar Type" = Table.TransformColumnTypes(#"Converted Dates To Table", {{"Date", type date}}),
+					#"Added Calendar Year" = Table.AddColumn(#"Converted Calendar Type", "Year", each Date.Year([Date]), Int64.Type),
+					#"Added Month Number" = Table.AddColumn(#"Added Calendar Year", "Month Number", each Date.Month([Date]), Int64.Type),
+					#"Added Month Label" = Table.AddColumn(
+						#"Added Month Number",
+						"Month",
+						each Date.ToText([Date], [Format="MMM yyyy", Culture="en-US"]),
+						type text
+					),
+					#"Added Month Sort" = Table.AddColumn(#"Added Month Label", "Month Sort", each [Year] * 100 + [Month Number], Int64.Type),
+					#"Added Calendar Quarter" = Table.AddColumn(#"Added Month Sort", "Quarter", each "Q" & Text.From(Date.QuarterOfYear([Date]), "en-US"), type text),
+					#"Added Calendar Day" = Table.AddColumn(#"Added Calendar Quarter", "Day", each Date.Day([Date]), Int64.Type),
+					#"Reordered Calendar Columns" = Table.ReorderColumns(
+						#"Added Calendar Day",
+						{"Date", "Month", "Month Sort", "Year", "Month Number", "Quarter", "Day"}
+					)
+				in
+					#"Reordered Calendar Columns"

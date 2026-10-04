@@ -1,0 +1,90 @@
+/// Tracked cash, e-wallet, credit-card and pay-later accounts.
+table DimAccount
+
+	/// Unique account name used by transaction From and To fields.
+	column 'Account Name'
+		dataType: string
+		isDefaultLabel
+		summarizeBy: none
+		sourceColumn: Account Name
+
+	/// Financial institution or wallet provider.
+	column Institution
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Institution
+
+	/// Operational account type such as Bank, E-wallet or Pay-later.
+	column 'Account Type'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Account Type
+
+	/// Natural balance class: Asset or Liability.
+	column 'Account Class'
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Account Class
+
+	/// Balance at the start of the opening date; liabilities are positive debt.
+	column 'Opening Balance'
+		dataType: int64
+		formatString: #,##0
+		summarizeBy: none
+		sourceColumn: Opening Balance
+
+	/// Date from which movements are tracked for the account.
+	column 'Opening Date'
+		dataType: dateTime
+		formatString: dd/MM/yyyy
+		summarizeBy: none
+		sourceColumn: Opening Date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// Optional limit for credit and pay-later accounts.
+	column 'Credit Limit'
+		dataType: int64
+		formatString: #,##0
+		summarizeBy: none
+		sourceColumn: Credit Limit
+
+	/// Yes enables transaction dropdown selection. Both Yes and No remain in balance summaries.
+	column Active
+		dataType: string
+		summarizeBy: none
+		sourceColumn: Active
+
+	partition DimAccount = m
+		mode: import
+		source =
+				let
+					// Keeps only account attributes required by the analytical model.
+					#"Selected Account Columns" = Table.SelectColumns(
+						AccountsRaw,
+						{"Account Name", "Institution", "Account Type", "Account Class", "Opening Balance", "Opening Date", "Credit Limit", "Active"},
+						MissingField.UseNull
+					),
+					// Trims editable account labels and classifications.
+					#"Cleaned Account Text" = Table.TransformColumns(
+						#"Selected Account Columns",
+						List.Transform(
+							{"Account Name", "Institution", "Account Type", "Account Class", "Active"},
+							each {_, each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text}
+						)
+					),
+					// Converts editable dates and VND balances defensively.
+					#"Converted Account Types" = Table.TransformColumns(
+						#"Cleaned Account Text",
+						{
+							{"Opening Balance", each try Int64.From(Number.Round(Number.From(_), 0)) otherwise null, Int64.Type},
+							{"Opening Date", each try Date.From(_) otherwise null, type date},
+							{"Credit Limit", each try Int64.From(Number.Round(Number.From(_), 0)) otherwise null, Int64.Type}
+						}
+					),
+					// Removes unused rows while retaining inactive accounts for history.
+					#"Filtered Named Accounts" = Table.SelectRows(#"Converted Account Types", each [Account Name] <> null),
+					#"Removed Duplicate Accounts" = Table.Distinct(#"Filtered Named Accounts", {"Account Name"})
+				in
+					#"Removed Duplicate Accounts"
+

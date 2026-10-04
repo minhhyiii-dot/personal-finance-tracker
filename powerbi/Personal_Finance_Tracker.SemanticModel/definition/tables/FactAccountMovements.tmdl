@@ -1,0 +1,143 @@
+/// Signed natural-balance ledger with opening rows and one row per From or To side.
+table FactAccountMovements
+	isHidden
+
+	column Date
+		dataType: dateTime
+		isHidden
+		formatString: dd/MM/yyyy
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column 'Transaction Key'
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Transaction Key
+
+	column Account
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Account
+
+	column Side
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Side
+
+	column 'Transaction Type'
+		dataType: string
+		isHidden
+		isAvailableInMdx: false
+		summarizeBy: none
+		sourceColumn: Transaction Type
+
+	column 'Balance Delta'
+		dataType: int64
+		isHidden
+		formatString: #,##0
+		isAvailableInMdx: false
+		summarizeBy: sum
+		sourceColumn: Balance Delta
+
+	partition FactAccountMovements = m
+		mode: import
+		source =
+				let
+					// Prepares the account-class lookup used to apply natural-balance signs.
+					#"Selected Account Lookup" = Table.SelectColumns(AccountsRaw, {"Account Name", "Account Class", "Opening Date"}, MissingField.UseNull),
+					#"Cleaned Account Lookup" = Table.TransformColumns(
+						#"Selected Account Lookup",
+						{
+							{"Account Name", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+							{"Account Class", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+							{"Opening Date", each let Value = try Date.From(_) otherwise null in if Value = null then #date(2026, 9, 1) else Value, type date}
+						}
+					),
+					#"Filtered Account Lookup" = Table.SelectRows(#"Cleaned Account Lookup", each [Account Name] <> null),
+					#"Removed Duplicate Lookup Accounts" = Table.Distinct(#"Filtered Account Lookup", {"Account Name"}),
+					// Projects every valid From movement into a separate ledger row.
+					#"Filtered From Movements" = Table.SelectRows(ValidTransactions, each [From Account] <> null and [From Account] <> ""),
+					#"Selected From Movements" = Table.SelectColumns(#"Filtered From Movements", {"Date", "Transaction Key", "Type", "Amount", "From Account"}),
+					#"Renamed From Movements" = Table.RenameColumns(#"Selected From Movements", {{"Type", "Transaction Type"}, {"From Account", "Account"}}),
+					#"Added From Side" = Table.AddColumn(#"Renamed From Movements", "Side", each "From", type text),
+					// Projects every valid To movement into a separate ledger row.
+					#"Filtered To Movements" = Table.SelectRows(ValidTransactions, each [To Account] <> null and [To Account] <> ""),
+					#"Selected To Movements" = Table.SelectColumns(#"Filtered To Movements", {"Date", "Transaction Key", "Type", "Amount", "To Account"}),
+					#"Renamed To Movements" = Table.RenameColumns(#"Selected To Movements", {{"Type", "Transaction Type"}, {"To Account", "Account"}}),
+					#"Added To Side" = Table.AddColumn(#"Renamed To Movements", "Side", each "To", type text),
+					#"Combined Transaction Movements" = Table.Combine({#"Added From Side", #"Added To Side"}),
+					#"Joined Movement Account Class" = Table.NestedJoin(
+						#"Combined Transaction Movements",
+						{"Account"},
+						#"Removed Duplicate Lookup Accounts",
+						{"Account Name"},
+						"Account Details",
+						JoinKind.LeftOuter
+					),
+					#"Expanded Movement Account Class" = Table.ExpandTableColumn(
+						#"Joined Movement Account Class",
+						"Account Details",
+						{"Account Class", "Opening Date"},
+						{"Account Class", "Account Opening Date"}
+					),
+					// Match Excel account balances: only movements on/after this account's opening date.
+					#"Filtered Since Account Opening" = Table.SelectRows(#"Expanded Movement Account Class", each [Date] >= [Account Opening Date]),
+					// Assets increase on To and liabilities increase on From; the opposite side reduces them.
+					#"Added Movement Balance Delta" = Table.AddColumn(
+						#"Filtered Since Account Opening",
+						"Balance Delta",
+						each if [Account Class] = "Asset" then (if [Side] = "To" then [Amount] else -[Amount])
+							else if [Account Class] = "Liability" then (if [Side] = "From" then [Amount] else -[Amount])
+							else null,
+						Int64.Type
+					),
+					#"Selected Transaction Ledger Fields" = Table.SelectColumns(
+						#"Added Movement Balance Delta",
+						{"Date", "Transaction Key", "Account", "Side", "Transaction Type", "Balance Delta"}
+					),
+					// Creates one opening row per named account, treating a blank opening balance as zero.
+					#"Selected Opening Fields" = Table.SelectColumns(AccountsRaw, {"Account Name", "Opening Balance", "Opening Date"}, MissingField.UseNull),
+					#"Converted Opening Fields" = Table.TransformColumns(
+						#"Selected Opening Fields",
+						{
+							{"Account Name", each let Value = if _ = null then "" else Text.Trim(Text.From(_)) in if Value = "" then null else Value, type text},
+							{"Opening Balance", each if _ = null then 0 else try Int64.From(Number.Round(Number.From(_), 0)) otherwise 0, Int64.Type},
+							{"Opening Date", each let Value = try Date.From(_) otherwise null in if Value = null then #date(2026, 9, 1) else Value, type date}
+						}
+					),
+					#"Filtered Named Openings" = Table.SelectRows(#"Converted Opening Fields", each [Account Name] <> null),
+					#"Removed Duplicate Openings" = Table.Distinct(#"Filtered Named Openings", {"Account Name"}),
+					#"Renamed Opening Fields" = Table.RenameColumns(
+						#"Removed Duplicate Openings",
+						{{"Account Name", "Account"}, {"Opening Balance", "Balance Delta"}, {"Opening Date", "Date"}}
+					),
+					#"Added Opening Key" = Table.AddColumn(#"Renamed Opening Fields", "Transaction Key", each "OPENING-" & [Account], type text),
+					#"Added Opening Side" = Table.AddColumn(#"Added Opening Key", "Side", each "Opening", type text),
+					#"Added Opening Type" = Table.AddColumn(#"Added Opening Side", "Transaction Type", each "Opening", type text),
+					#"Selected Opening Ledger Fields" = Table.SelectColumns(
+						#"Added Opening Type",
+						{"Date", "Transaction Key", "Account", "Side", "Transaction Type", "Balance Delta"}
+					),
+					#"Combined Complete Ledger" = Table.Combine({#"Selected Opening Ledger Fields", #"Selected Transaction Ledger Fields"}),
+					#"Converted Ledger Types" = Table.TransformColumnTypes(
+						#"Combined Complete Ledger",
+						{
+							{"Date", type date},
+							{"Transaction Key", type text},
+							{"Account", type text},
+							{"Side", type text},
+							{"Transaction Type", type text},
+							{"Balance Delta", Int64.Type}
+						}
+					)
+				in
+					#"Converted Ledger Types"
